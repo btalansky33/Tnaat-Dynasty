@@ -314,12 +314,15 @@ function renderRecords(chain, games, ownerDirectory) {
   const current = {}; const longest = {};
   sorted.forEach(g => {
     const winner = g.ptsA > g.ptsB ? g.ownerA : (g.ptsB > g.ptsA ? g.ownerB : null);
+    const loser = g.ptsA > g.ptsB ? g.ownerB : (g.ptsB > g.ptsA ? g.ownerA : null);
     if (winner) {
       current[winner] = (current[winner] || 0) + 1;
       if (current[winner] > (longest[winner]?.count || 0)) longest[winner] = { count: current[winner] };
-      Object.keys(current).forEach(k => { if (k !== winner) current[k] = 0; });
+      current[loser] = 0;
     } else {
-      Object.keys(current).forEach(k => current[k] = 0);
+      // tie: breaks a streak for both teams involved, nobody else
+      current[g.ownerA] = 0;
+      current[g.ownerB] = 0;
     }
   });
   const allStreaks = Object.entries(longest)
@@ -329,13 +332,15 @@ function renderRecords(chain, games, ownerDirectory) {
   // longest losing streak per owner (mirror of the above, for bragging rights the other way)
   const currentL = {}; const longestL = {};
   sorted.forEach(g => {
+    const winner = g.ptsA > g.ptsB ? g.ownerA : (g.ptsB > g.ptsA ? g.ownerB : null);
     const loser = g.ptsA > g.ptsB ? g.ownerB : (g.ptsB > g.ptsA ? g.ownerA : null);
     if (loser) {
       currentL[loser] = (currentL[loser] || 0) + 1;
       if (currentL[loser] > (longestL[loser]?.count || 0)) longestL[loser] = { count: currentL[loser] };
-      Object.keys(currentL).forEach(k => { if (k !== loser) currentL[k] = 0; });
+      currentL[winner] = 0;
     } else {
-      Object.keys(currentL).forEach(k => currentL[k] = 0);
+      currentL[g.ownerA] = 0;
+      currentL[g.ownerB] = 0;
     }
   });
   const allLossStreaks = Object.entries(longestL)
