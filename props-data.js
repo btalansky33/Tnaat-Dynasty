@@ -12,19 +12,19 @@
    week number in it) or old votes will carry over into new bets.
    ============================================================ */
 window.WEEKLY_PROPS = {
-  week: "Week 1",
+  week: "Week 2",
   bets: [
-    { id: "w1-1", question: "Who scores more total points this week?", optionA: "Higher seed teams", optionB: "Lower seed teams" },
-    { id: "w1-2", question: "Will any team break 150 points this week?", optionA: "Yes", optionB: "No" },
-    { id: "w1-3", question: "Closest game of the week decided by...", optionA: "Under 10 points", optionB: "Over 10 points" },
-    { id: "w1-4", question: "Will the highest-scoring team also win their matchup?", optionA: "Yes", optionB: "No" },
-    { id: "w1-5", question: "Any team scores under 90 points?", optionA: "Yes", optionB: "No" },
-    { id: "w1-6", question: "More upsets this week (projected underdog wins)?", optionA: "0-1 upsets", optionB: "2+ upsets" },
-    { id: "w1-7", question: "Total combined league scoring this week vs. last week?", optionA: "Higher", optionB: "Lower" },
-    { id: "w1-8", question: "Which position group has the highest single output?", optionA: "RB", optionB: "WR" },
-    { id: "w1-9", question: "Will there be a waiver-wire pickup that outscores a starter?", optionA: "Yes", optionB: "No" },
-    { id: "w1-10", question: "Biggest blowout margin this week?", optionA: "Under 30 points", optionB: "30+ points" },
-    { id: "w1-11", question: "Will the current last-place team win this week?", optionA: "Yes", optionB: "No" },
-    { id: "w1-12", question: "Does any QB throw for 4+ TDs across the league?", optionA: "Yes", optionB: "No" }
+    { id: "w2-1", question: "Who scores more total points this week?", optionA: "Higher seed teams", optionB: "Lower seed teams" },
+    { id: "w2-2", question: "Will any team break 150 points this week?", optionA: "Yes", optionB: "No" },
+    { id: "w2-3", question: "Closest game of the week decided by...", optionA: "Under 10 points", optionB: "Over 10 points" },
+    { id: "w2-4", question: "Will the highest-scoring team also win their matchup?", optionA: "Yes", optionB: "No" },
+    { id: "w2-5", question: "Does any team score under 90 points?", optionA: "Yes", optionB: "No" },
+    { id: "w2-6", question: "More upsets this week (projected underdog wins)?", optionA: "0-1 upsets", optionB: "2+ upsets" },
+    { id: "w2-7", question: "Total combined league scoring vs. Week 1?", optionA: "Higher", optionB: "Lower" },
+    { id: "w2-8", question: "Which position group posts the highest single output?", optionA: "RB", optionB: "WR" },
+    { id: "w2-9", question: "Does a waiver-wire pickup outscore a starter somewhere in the league?", optionA: "Yes", optionB: "No" },
+    { id: "w2-10", question: "Biggest blowout margin this week?", optionA: "Under 30 points", optionB: "30+ points" },
+    { id: "w2-11", question: "Does the current last-place team win this week?", optionA: "Yes", optionB: "No" },
+    { id: "w2-12", question: "Does any QB throw for 4+ TDs across the league?", optionA: "Yes", optionB: "No" }
   ]
 };

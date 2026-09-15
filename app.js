@@ -35,6 +35,19 @@ function switchTab(target) {
   if (target === "trades" && !state.loaded.trades) { state.loaded.trades = true; renderTradeFeed(); }
 }
 
+/* ---------- click any team name, anywhere on the site, to open its page ---------- */
+function teamLink(ownerId, label) {
+  return `<a href="#" class="team-link" data-owner="${ownerId}">${label}</a>`;
+}
+document.addEventListener("click", e => {
+  const link = e.target.closest(".team-link");
+  if (!link) return;
+  e.preventDefault();
+  document.getElementById("record-modal")?.classList.add("hidden");
+  switchTab("teams");
+  openTeamDetail(link.dataset.owner);
+});
+
 /* ============================================================
    League + matchup history (unchanged core: walks previous_league_id)
    ============================================================ */
@@ -155,8 +168,8 @@ function renderStandings(chain, rows) {
   document.getElementById("standings-body").innerHTML = rows.map((r, i) => `
     <tr>
       <td>${i + 1}</td>
-      <td>${r.manager}</td>
-      <td>${r.team}</td>
+      <td>${teamLink(r.ownerId, r.manager)}</td>
+      <td>${teamLink(r.ownerId, r.team)}</td>
       <td class="num">${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ""}</td>
       <td class="num">${r.pf.toFixed(1)}</td>
       <td class="num">${r.pa.toFixed(1)}</td>
@@ -221,7 +234,7 @@ function renderH2HResult(games, ownerDirectory, idA, idB) {
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Meeting</th><th>${ownerDirectory[idA].name}</th><th>${ownerDirectory[idB].name}</th><th>Winner</th></tr></thead>
+        <thead><tr><th>Meeting</th><th>${teamLink(idA, ownerDirectory[idA].name)}</th><th>${teamLink(idB, ownerDirectory[idB].name)}</th><th>Winner</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
@@ -235,9 +248,9 @@ function renderRecords(chain, games, ownerDirectory) {
   const allGamePoints = [];
   const allShootouts = [];
   games.forEach(g => {
-    allGamePoints.push({ value: g.ptsA, who: g.nameA, meta: `${g.season}, Week ${g.week}` });
-    allGamePoints.push({ value: g.ptsB, who: g.nameB, meta: `${g.season}, Week ${g.week}` });
-    allShootouts.push({ value: g.ptsA + g.ptsB, who: `${g.nameA} vs ${g.nameB}`, meta: `${g.season}, Week ${g.week}` });
+    allGamePoints.push({ value: g.ptsA, who: teamLink(g.ownerA, g.nameA), meta: `${g.season}, Week ${g.week}` });
+    allGamePoints.push({ value: g.ptsB, who: teamLink(g.ownerB, g.nameB), meta: `${g.season}, Week ${g.week}` });
+    allShootouts.push({ value: g.ptsA + g.ptsB, who: `${teamLink(g.ownerA, g.nameA)} vs ${teamLink(g.ownerB, g.nameB)}`, meta: `${g.season}, Week ${g.week}` });
   });
   allGamePoints.sort((a, b) => b.value - a.value);
   allShootouts.sort((a, b) => b.value - a.value);
@@ -248,7 +261,7 @@ function renderRecords(chain, games, ownerDirectory) {
     s.rosters.forEach(r => {
       const user = s.users.find(u => u.user_id === r.owner_id);
       const pf = (r.settings?.fpts ?? 0) + (r.settings?.fpts_decimal ?? 0) / 100;
-      allSeasonPF.push({ value: pf, who: user?.display_name || "Unknown", meta: s.league.season });
+      allSeasonPF.push({ value: pf, who: teamLink(r.owner_id, user?.display_name || "Unknown"), meta: s.league.season });
     });
   });
   allSeasonPF.sort((a, b) => b.value - a.value);
@@ -267,8 +280,31 @@ function renderRecords(chain, games, ownerDirectory) {
     }
   });
   const allStreaks = Object.entries(longest)
-    .map(([ownerId, v]) => ({ value: v.count, who: ownerDirectory[ownerId]?.name || "Unknown", meta: "consecutive wins" }))
+    .map(([ownerId, v]) => ({ value: v.count, who: teamLink(ownerId, ownerDirectory[ownerId]?.name || "Unknown"), meta: "consecutive wins" }))
     .sort((a, b) => b.value - a.value);
+
+  // longest losing streak per owner (mirror of the above, for bragging rights the other way)
+  const currentL = {}; const longestL = {};
+  sorted.forEach(g => {
+    const loser = g.ptsA > g.ptsB ? g.ownerB : (g.ptsB > g.ptsA ? g.ownerA : null);
+    if (loser) {
+      currentL[loser] = (currentL[loser] || 0) + 1;
+      if (currentL[loser] > (longestL[loser]?.count || 0)) longestL[loser] = { count: currentL[loser] };
+      Object.keys(currentL).forEach(k => { if (k !== loser) currentL[k] = 0; });
+    } else {
+      Object.keys(currentL).forEach(k => currentL[k] = 0);
+    }
+  });
+  const allLossStreaks = Object.entries(longestL)
+    .map(([ownerId, v]) => ({ value: v.count, who: teamLink(ownerId, ownerDirectory[ownerId]?.name || "Unknown"), meta: "consecutive losses" }))
+    .sort((a, b) => b.value - a.value);
+
+  // career points-per-game average, all-time
+  const ptsTotal = {};
+  games.forEach(g => {
+    ptsTotal[g.ownerA] = (ptsTotal[g.ownerA] || 0) + g.ptsA;
+    ptsTotal[g.ownerB] = (ptsTotal[g.ownerB] || 0) + g.ptsB;
+  });
 
   // all-time wins per owner
   const winCounts = {};
@@ -280,7 +316,15 @@ function renderRecords(chain, games, ownerDirectory) {
     if (winner) winCounts[winner] = (winCounts[winner] || 0) + 1;
   });
   const allWins = Object.entries(winCounts)
-    .map(([ownerId, count]) => ({ value: count, who: ownerDirectory[ownerId]?.name || "Unknown", meta: "regular + postseason" }))
+    .map(([ownerId, count]) => ({ value: count, who: teamLink(ownerId, ownerDirectory[ownerId]?.name || "Unknown"), meta: "regular + postseason" }))
+    .sort((a, b) => b.value - a.value);
+
+  const allCareerPPG = Object.entries(ptsTotal)
+    .map(([ownerId, total]) => ({
+      value: gameCounts[ownerId] ? total / gameCounts[ownerId] : 0,
+      who: teamLink(ownerId, ownerDirectory[ownerId]?.name || "Unknown"),
+      meta: `${gameCounts[ownerId] || 0} games played`
+    }))
     .sort((a, b) => b.value - a.value);
 
   // stash full leaderboards for the click-through modal
@@ -289,21 +333,26 @@ function renderRecords(chain, games, ownerDirectory) {
     shootout: { title: "Highest-Scoring Shootouts", rows: allShootouts, format: v => v.toFixed(1) },
     bestSeason: { title: "Best Single Seasons (PF)", rows: allSeasonPF, format: v => v.toFixed(1) },
     streak: { title: "Longest Win Streaks", rows: allStreaks, format: v => v },
+    lossStreak: { title: "Longest Losing Streaks", rows: allLossStreaks, format: v => v },
+    ppg: { title: "Career Points Per Game", rows: allCareerPPG, format: v => v.toFixed(1) },
     wins: { title: "Most All-Time Wins", rows: allWins, format: v => v },
     champs: { title: "Most Championships", rows: [], format: v => v } // filled in once bracket data resolves
   };
 
   const cards = [
-    { key: "pointsGame", label: "Most Points, Single Game", value: allGamePoints[0]?.value.toFixed(1), who: allGamePoints[0]?.who, meta: allGamePoints[0]?.meta },
-    { key: "shootout", label: "Highest-Scoring Shootout", value: allShootouts[0]?.value.toFixed(1), who: allShootouts[0]?.who, meta: allShootouts[0]?.meta },
-    { key: "bestSeason", label: "Best Single Season (PF)", value: allSeasonPF[0]?.value.toFixed(1), who: allSeasonPF[0]?.who, meta: allSeasonPF[0]?.meta },
-    { key: "streak", label: "Longest Win Streak", value: allStreaks[0]?.value, who: allStreaks[0]?.who, meta: allStreaks[0]?.meta },
-    { key: "wins", label: "Most All-Time Wins", value: allWins[0]?.value, who: allWins[0]?.who, meta: allWins[0]?.meta },
-    { key: "champs", label: "Most Championships", value: "—", who: "—", meta: "loading…", id: "champ-record-card" }
+    { key: "pointsGame", icon: "🔥", label: "Most Points, Single Game", value: allGamePoints[0]?.value.toFixed(1), who: allGamePoints[0]?.who, meta: allGamePoints[0]?.meta, featured: true },
+    { key: "champs", icon: "🏆", label: "Most Championships", value: "—", who: "—", meta: "loading…", id: "champ-record-card" },
+    { key: "shootout", icon: "💥", label: "Highest-Scoring Shootout", value: allShootouts[0]?.value.toFixed(1), who: allShootouts[0]?.who, meta: allShootouts[0]?.meta },
+    { key: "bestSeason", icon: "📈", label: "Best Single Season (PF)", value: allSeasonPF[0]?.value.toFixed(1), who: allSeasonPF[0]?.who, meta: allSeasonPF[0]?.meta },
+    { key: "streak", icon: "🎯", label: "Longest Win Streak", value: allStreaks[0]?.value, who: allStreaks[0]?.who, meta: allStreaks[0]?.meta },
+    { key: "lossStreak", icon: "💀", label: "Longest Losing Streak", value: allLossStreaks[0]?.value, who: allLossStreaks[0]?.who, meta: allLossStreaks[0]?.meta },
+    { key: "wins", icon: "⚔️", label: "Most All-Time Wins", value: allWins[0]?.value, who: allWins[0]?.who, meta: allWins[0]?.meta },
+    { key: "ppg", icon: "📊", label: "Career Points Per Game", value: allCareerPPG[0]?.value.toFixed(1), who: allCareerPPG[0]?.who, meta: allCareerPPG[0]?.meta }
   ];
 
   document.getElementById("record-grid").innerHTML = cards.map(c => `
-    <button class="record-card" data-key="${c.key}" ${c.id ? `id="${c.id}"` : ""}>
+    <button class="record-card ${c.featured ? "featured" : ""}" data-key="${c.key}" ${c.id ? `id="${c.id}"` : ""}>
+      <p class="icon">${c.icon}</p>
       <p class="label">${c.label}</p>
       <p class="value">${c.value ?? "–"}</p>
       <p class="who">${c.who ?? "—"}</p>
@@ -312,7 +361,10 @@ function renderRecords(chain, games, ownerDirectory) {
   `).join("");
 
   document.querySelectorAll(".record-card").forEach(card => {
-    card.addEventListener("click", () => openRecordModal(card.dataset.key));
+    card.addEventListener("click", e => {
+      if (e.target.closest(".team-link")) return; // let the global team-link handler take over
+      openRecordModal(card.dataset.key);
+    });
   });
 
   // championships, from each season's winners bracket final
@@ -329,19 +381,11 @@ function renderRecords(chain, games, ownerDirectory) {
   document.getElementById("rankings-list").innerHTML = rankings.map((r, i) => `
     <li>
       <span class="rank">${i + 1}</span>
-      <a href="#" data-owner="${r.id}" class="ranking-link">${r.name}</a>
+      ${teamLink(r.id, r.name)}
       <span class="rec">${r.wins}-${r.losses}</span>
       <span class="pct">${(r.pct * 100).toFixed(0)}%</span>
     </li>
   `).join("");
-
-  document.querySelectorAll(".ranking-link").forEach(a => {
-    a.addEventListener("click", e => {
-      e.preventDefault();
-      switchTab("teams");
-      openTeamDetail(a.dataset.owner);
-    });
-  });
 }
 
 async function renderChampionshipRecord(chain, ownerDirectory) {
@@ -357,7 +401,7 @@ async function renderChampionshipRecord(chain, ownerDirectory) {
     } catch (e) { /* season likely still in progress */ }
   }));
   const ranked = Object.entries(counts)
-    .map(([ownerId, count]) => ({ value: count, who: ownerDirectory[ownerId]?.name || "Unknown", meta: count === 1 ? "title" : "titles" }))
+    .map(([ownerId, count]) => ({ value: count, who: teamLink(ownerId, ownerDirectory[ownerId]?.name || "Unknown"), meta: count === 1 ? "title" : "titles" }))
     .sort((a, b) => b.value - a.value);
   if (state.leaderboards) state.leaderboards.champs.rows = ranked;
 
@@ -365,7 +409,7 @@ async function renderChampionshipRecord(chain, ownerDirectory) {
   if (!card) return;
   if (ranked[0]) {
     card.querySelector(".value").textContent = ranked[0].value;
-    card.querySelector(".who").textContent = ranked[0].who;
+    card.querySelector(".who").innerHTML = ranked[0].who;
     card.querySelector(".meta").textContent = ranked[0].meta;
   } else {
     card.querySelector(".value").textContent = "–";
@@ -577,7 +621,7 @@ async function renderThisWeek() {
       const fact = buildFunFact(ownerA, ownerB, nameA, nameB);
       return `
         <div class="hype-card">
-          <p class="matchup-title">${nameA} vs ${nameB}</p>
+          <p class="matchup-title">${teamLink(ownerA, nameA)} vs ${teamLink(ownerB, nameB)}</p>
           <p class="fun-fact">${fact}</p>
           <button class="btn" data-idx="${i}">View Full Matchup</button>
         </div>`;
@@ -764,14 +808,14 @@ async function renderPowerRankings() {
       const players = (r.players || []).map(pid => valueBySleeperId[pid]).filter(Boolean);
       const total = players.reduce((sum, p) => sum + p.value, 0);
       const topAsset = players.sort((a, b) => b.value - a.value)[0];
-      return { owner, total, topAsset };
+      return { ownerId: r.owner_id, owner, total, topAsset };
     }).sort((a, b) => b.total - a.total);
 
     body.innerHTML = rows.map((r, i) => `
       <tr>
         <td>${i + 1}</td>
-        <td>${r.owner?.team || "—"}</td>
-        <td>${r.owner?.name || "—"}</td>
+        <td>${r.owner ? teamLink(r.ownerId, r.owner.team) : "—"}</td>
+        <td>${r.owner ? teamLink(r.ownerId, r.owner.name) : "—"}</td>
         <td class="num">${r.total.toLocaleString()}</td>
         <td>${r.topAsset?.player?.name || "—"}</td>
       </tr>
@@ -783,8 +827,39 @@ async function renderPowerRankings() {
 }
 
 /* ============================================================
-   TRADE FEED — every trade, formatted as a poster-style card
+   TRADE FEED — every trade, formatted as a poster-style card,
+   with a value-based fairness rating (players via Sleeper's IDs,
+   picks matched by name) from Dynasty Dealer's free values API.
    ============================================================ */
+async function getDynastyDealerValues() {
+  if (state.dealerValues) return state.dealerValues;
+  try {
+    const { players } = await getJSON("https://www.dynastydealer.com/api/player-values");
+    state.dealerValues = players || [];
+  } catch (e) {
+    state.dealerValues = [];
+  }
+  return state.dealerValues;
+}
+
+function findAssetValue(dealerValues, { playerId, pickLabel }) {
+  if (playerId) {
+    const hit = dealerValues.find(v => v.sleeper_id === playerId);
+    return hit ? hit.current_value : 0;
+  }
+  if (pickLabel) {
+    // pickLabel looks like "2027 1st Round Pick" — fuzzy-match against
+    // Dynasty Dealer's pick entries (they don't carry a sleeper_id)
+    const year = pickLabel.match(/\d{4}/)?.[0];
+    const roundWord = pickLabel.match(/1st|2nd|3rd|4th/)?.[0];
+    const hit = dealerValues.find(v =>
+      !v.position && v.name && (!year || v.name.includes(year)) && (!roundWord || v.name.toLowerCase().includes(roundWord))
+    );
+    return hit ? hit.current_value : 0;
+  }
+  return 0;
+}
+
 async function renderTradeFeed() {
   const feed = document.getElementById("trade-feed");
   try {
@@ -807,28 +882,48 @@ async function renderTradeFeed() {
 
     allTrades.sort((a, b) => (b.tx.created || 0) - (a.tx.created || 0));
     await loadPlayersIfNeeded();
+    const dealerValues = await getDynastyDealerValues();
 
     feed.innerHTML = allTrades.map(({ tx, season }) => {
       const sides = {};
       (tx.roster_ids || []).forEach(rid => {
         const oid = ownerKey(season, rid);
-        sides[rid] = { owner: state.ownerDirectory[oid] || { name: "Unknown", team: "Unknown" }, items: [] };
+        sides[rid] = { ownerId: oid, owner: state.ownerDirectory[oid] || { name: "Unknown", team: "Unknown" }, items: [], value: 0 };
       });
       Object.entries(tx.adds || {}).forEach(([pid, rid]) => {
         if (!sides[rid]) return;
         const p = state.players?.[pid];
-        sides[rid].items.push(p ? (p.full_name || pid) : pid);
+        const label = p ? (p.full_name || pid) : pid;
+        sides[rid].items.push(label);
+        sides[rid].value += findAssetValue(dealerValues, { playerId: pid });
       });
       (tx.draft_picks || []).forEach(pick => {
         if (!sides[pick.owner_id]) return;
-        sides[pick.owner_id].items.push(`${pick.season} Round ${pick.round} pick`);
+        const label = `${pick.season} Round ${pick.round} pick`;
+        sides[pick.owner_id].items.push(label);
+        sides[pick.owner_id].value += findAssetValue(dealerValues, { pickLabel: label });
       });
       const date = tx.created ? new Date(tx.created).toLocaleDateString() : season.league.season;
       const sideEntries = Object.values(sides);
 
+      // rating: only meaningful for a straight two-team trade
+      let ratingHTML = "";
+      if (sideEntries.length === 2 && (sideEntries[0].value + sideEntries[1].value) > 0) {
+        const [s1, s2] = sideEntries;
+        const total = s1.value + s2.value;
+        const diffPct = Math.round((Math.abs(s1.value - s2.value) / total) * 100);
+        const winner = s1.value === s2.value ? null : (s1.value > s2.value ? s1 : s2);
+        const verdict = !winner
+          ? "Dead even by value"
+          : diffPct < 10 ? `Fair trade, slight edge to ${winner.owner.team}`
+          : diffPct < 30 ? `${winner.owner.team} got the better end`
+          : `Lopsided — ${winner.owner.team} won this one big`;
+        ratingHTML = `<p class="trade-rating">${verdict} <span class="rating-pct">(${100 - diffPct}/100 fairness)</span></p>`;
+      }
+
       const sideHTML = sideEntries.map(s => `
         <div class="trade-side">
-          <p class="team">${s.owner.avatar ? `<img src="${s.owner.avatar}" alt="">` : ""}${s.owner.team}</p>
+          <p class="team">${s.owner.avatar ? `<img src="${s.owner.avatar}" alt="">` : ""}${teamLink(s.ownerId, s.owner.team)}</p>
           <ul>${s.items.map(i => `<li>${i}</li>`).join("") || "<li>—</li>"}</ul>
         </div>
       `);
@@ -842,8 +937,9 @@ async function renderTradeFeed() {
         <div class="trade-card">
           <p class="trade-date">${season.league.season} · ${date}</p>
           <div class="trade-sides">${layout}</div>
+          ${ratingHTML}
         </div>`;
-    }).join("");
+    }).join("") + `<p class="section-note" style="margin-top:1rem;">Trade values by <a href="https://www.dynastydealer.com" target="_blank" rel="noopener">Dynasty Dealer</a>.</p>`;
   } catch (e) {
     console.error(e);
     feed.innerHTML = `<p class="loading">Couldn't load the trade log right now.</p>`;
