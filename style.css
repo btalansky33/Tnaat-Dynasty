@@ -260,6 +260,18 @@ td.num, th.num{ font-family:var(--mono); }
 }
 .modal-box .rankings-list{ margin-top:0; }
 
+/* ---------- Tank Meter ---------- */
+.tank-meter{ display:flex; align-items:center; gap:.6rem; min-width:150px; }
+.tank-track{ flex:1; height:6px; background:var(--panel-line); border-radius:3px; overflow:hidden; min-width:70px; }
+.tank-fill{ height:100%; border-radius:3px; }
+.tank-fill.contender{ background:#4ADE80; }
+.tank-fill.bubble{ background:var(--gold); }
+.tank-fill.tanking{ background:var(--coral); }
+.tank-label{ font-size:.75rem; font-weight:600; white-space:nowrap; }
+.tank-label.contender{ color:#4ADE80; }
+.tank-label.bubble{ color:var(--gold); }
+.tank-label.tanking{ color:var(--coral); }
+
 /* ---------- This Week / matchup hype ---------- */
 .hype-grid{
   display:grid;

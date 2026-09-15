@@ -165,7 +165,26 @@ function renderHero(chain, games) {
 
 function renderStandings(chain, rows) {
   document.getElementById("standings-season").textContent = chain[0].league.season;
-  document.getElementById("standings-body").innerHTML = rows.map((r, i) => `
+
+  // Tank Meter: blends win % (60%) with scoring strength relative to the
+  // rest of the league this season (40%), so a team that's losing close,
+  // high-scoring games doesn't get lumped in with a true tank job.
+  const pfValues = rows.map(r => r.pf);
+  const minPF = Math.min(...pfValues), maxPF = Math.max(...pfValues);
+  const pfRange = maxPF - minPF || 1;
+
+  const scored = rows.map(r => {
+    const games = r.wins + r.losses + r.ties;
+    const winPct = games ? (r.wins + r.ties * 0.5) / games : 0;
+    const pfNorm = (r.pf - minPF) / pfRange;
+    const score = Math.round((winPct * 0.6 + pfNorm * 0.4) * 100);
+    return { ...r, tankScore: score };
+  });
+
+  document.getElementById("standings-body").innerHTML = scored.map((r, i) => {
+    const label = r.tankScore >= 65 ? "Contender" : r.tankScore >= 35 ? "Bubble" : "Tanking";
+    const meterClass = r.tankScore >= 65 ? "contender" : r.tankScore >= 35 ? "bubble" : "tanking";
+    return `
     <tr>
       <td>${i + 1}</td>
       <td>${teamLink(r.ownerId, r.manager)}</td>
@@ -173,8 +192,14 @@ function renderStandings(chain, rows) {
       <td class="num">${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ""}</td>
       <td class="num">${r.pf.toFixed(1)}</td>
       <td class="num">${r.pa.toFixed(1)}</td>
-    </tr>
-  `).join("");
+      <td>
+        <div class="tank-meter">
+          <div class="tank-track"><div class="tank-fill ${meterClass}" style="width:${r.tankScore}%"></div></div>
+          <span class="tank-label ${meterClass}">${label}</span>
+        </div>
+      </td>
+    </tr>`;
+  }).join("");
 }
 
 /* ============================================================
