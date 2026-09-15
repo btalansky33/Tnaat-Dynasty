@@ -33,6 +33,9 @@ function switchTab(target) {
   if (target === "propbets" && !state.loaded.propbets) { state.loaded.propbets = true; renderPropBets(); }
   if (target === "power" && !state.loaded.power) { state.loaded.power = true; renderPowerRankings(); }
   if (target === "trades" && !state.loaded.trades) { state.loaded.trades = true; renderTradeFeed(); }
+  if (target === "awards" && !state.loaded.awards) { state.loaded.awards = true; renderAwards(); }
+  if (target === "playoffs" && !state.loaded.playoffs) { state.loaded.playoffs = true; renderPlayoffPicture(); }
+  if (target === "waivers" && !state.loaded.waivers) { state.loaded.waivers = true; renderWaiverFeed(); }
 }
 
 /* ---------- click any team name, anywhere on the site, to open its page ---------- */
@@ -161,6 +164,21 @@ function renderHero(chain, games) {
   document.getElementById("stat-games").textContent = games.length;
   const oldestSeason = chain[chain.length - 1]?.league.season;
   if (oldestSeason) document.getElementById("hero-founded").textContent = oldestSeason;
+}
+
+async function renderHeroDates(chain) {
+  const el = document.getElementById("hero-dates");
+  try {
+    const nflState = await getJSON(`${API}/state/nfl`);
+    state.nflState = nflState;
+    const settings = chain[0].league.settings || {};
+    const parts = [`Week ${nflState.week}`];
+    if (settings.trade_deadline) parts.push(`Trade deadline: Week ${settings.trade_deadline}`);
+    if (settings.playoff_week_start) parts.push(`Playoffs start: Week ${settings.playoff_week_start}`);
+    el.textContent = parts.join("  ·  ");
+  } catch (e) {
+    el.textContent = "";
+  }
 }
 
 function renderStandings(chain, rows) {
@@ -541,6 +559,7 @@ async function openTeamDetail(ownerId) {
   document.getElementById("team-detail-name").textContent = o.team;
   document.getElementById("team-detail-meta").textContent = `Managed by ${o.name}`;
   document.getElementById("roster-body").innerHTML = `<tr><td colspan="4" class="loading">Loading roster…</td></tr>`;
+  renderRivalryBadges(ownerId);
 
   // the poop easter egg — only for whoever is currently in last place
   if (ownerId === state.lastPlaceOwner) {
@@ -620,7 +639,7 @@ async function renderRoster(ownerId) {
 async function renderThisWeek() {
   const grid = document.getElementById("hype-grid");
   try {
-    const nflState = await getJSON(`${API}/state/nfl`);
+    const nflState = state.nflState || await getJSON(`${API}/state/nfl`);
     const week = nflState.week || 1;
     const current = state.chain[0];
     document.getElementById("thisweek-subhead").textContent = `${current.league.season}, Week ${week}`;
@@ -885,20 +904,28 @@ function findAssetValue(dealerValues, { playerId, pickLabel }) {
   return 0;
 }
 
+async function getAllTransactions() {
+  if (state.allTransactions) return state.allTransactions;
+  const all = [];
+  for (const season of state.chain) {
+    const weekTx = await Promise.all(
+      Array.from({ length: 18 }, (_, i) => i + 1).map(wk =>
+        getJSON(`${API}/league/${season.league.league_id}/transactions/${wk}`).catch(() => [])
+      )
+    );
+    weekTx.flat()
+      .filter(t => t.status === "complete")
+      .forEach(t => all.push({ tx: t, season }));
+  }
+  state.allTransactions = all;
+  return all;
+}
+
 async function renderTradeFeed() {
   const feed = document.getElementById("trade-feed");
   try {
-    const allTrades = [];
-    for (const season of state.chain) {
-      const weekTx = await Promise.all(
-        Array.from({ length: 18 }, (_, i) => i + 1).map(wk =>
-          getJSON(`${API}/league/${season.league.league_id}/transactions/${wk}`).catch(() => [])
-        )
-      );
-      weekTx.flat()
-        .filter(t => t.type === "trade" && t.status === "complete")
-        .forEach(t => allTrades.push({ tx: t, season }));
-    }
+    const allTx = await getAllTransactions();
+    const allTrades = allTx.filter(({ tx }) => tx.type === "trade");
 
     if (allTrades.length === 0) {
       feed.innerHTML = `<p class="loading">No trades on record yet.</p>`;
@@ -972,6 +999,197 @@ async function renderTradeFeed() {
 }
 
 /* ============================================================
+   WAIVER WIRE — every add/drop, same feed style as trades
+   ============================================================ */
+async function renderWaiverFeed() {
+  const feed = document.getElementById("waiver-feed");
+  try {
+    const allTx = await getAllTransactions();
+    const waiverTx = allTx.filter(({ tx }) => tx.type === "waiver" || tx.type === "free_agent");
+
+    if (waiverTx.length === 0) {
+      feed.innerHTML = `<p class="loading">No waiver moves on record yet.</p>`;
+      return;
+    }
+
+    waiverTx.sort((a, b) => (b.tx.created || 0) - (a.tx.created || 0));
+    await loadPlayersIfNeeded();
+
+    feed.innerHTML = waiverTx.slice(0, 100).map(({ tx, season }) => {
+      const rid = tx.roster_ids?.[0];
+      const oid = rid != null ? ownerKey(season, rid) : null;
+      const owner = oid ? (state.ownerDirectory[oid] || { name: "Unknown", team: "Unknown" }) : { name: "Unknown", team: "Unknown" };
+      const added = Object.keys(tx.adds || {}).map(pid => {
+        const p = state.players?.[pid];
+        return p ? (p.full_name || pid) : pid;
+      });
+      const dropped = Object.keys(tx.drops || {}).map(pid => {
+        const p = state.players?.[pid];
+        return p ? (p.full_name || pid) : pid;
+      });
+      const date = tx.created ? new Date(tx.created).toLocaleDateString() : season.league.season;
+      const bid = tx.settings?.waiver_bid != null ? ` · $${tx.settings.waiver_bid} FAAB` : "";
+      const kind = tx.type === "waiver" ? "Waiver claim" : "Free agent";
+
+      return `
+        <div class="trade-card">
+          <p class="trade-date">${season.league.season} · ${date} · ${kind}${bid}</p>
+          <div class="trade-sides">
+            <div class="trade-side">
+              <p class="team">${owner.avatar ? `<img src="${owner.avatar}" alt="">` : ""}${oid ? teamLink(oid, owner.team) : owner.team}</p>
+              <ul>
+                ${added.map(n => `<li>+ ${n}</li>`).join("")}
+                ${dropped.map(n => `<li>− ${n}</li>`).join("")}
+              </ul>
+            </div>
+          </div>
+        </div>`;
+    }).join("");
+  } catch (e) {
+    console.error(e);
+    feed.innerHTML = `<p class="loading">Couldn't load the waiver log right now.</p>`;
+  }
+}
+
+/* ============================================================
+   WEEKLY AWARDS — highest/lowest scorer, best bench, worst start/sit
+   from the most recently completed week
+   ============================================================ */
+async function findLastCompletedWeek() {
+  const current = state.chain[0];
+  let week = state.nflState?.week || 1;
+  for (let attempt = 0; attempt < 5 && week >= 1; attempt++, week--) {
+    const matchups = await getJSON(`${API}/league/${current.league.league_id}/matchups/${week}`).catch(() => []);
+    const total = matchups.reduce((sum, m) => sum + (m.points || 0), 0);
+    if (total > 0) return { week, matchups };
+  }
+  return { week: 0, matchups: [] };
+}
+
+async function renderAwards() {
+  const grid = document.getElementById("awards-grid");
+  try {
+    const { week, matchups } = await findLastCompletedWeek();
+    if (!week || matchups.length === 0) {
+      grid.innerHTML = `<p class="loading">No completed weeks yet this season.</p>`;
+      return;
+    }
+    document.getElementById("awards-week-label").textContent = `Week ${week}`;
+    await loadPlayersIfNeeded();
+    const current = state.chain[0];
+
+    let highest = null, lowest = null, bestBench = null, worstStartSit = null;
+    matchups.forEach(m => {
+      const oid = ownerKey(current, m.roster_id);
+      const teamName = state.ownerDirectory[oid]?.team || "Unknown";
+      const starters = m.starters || [];
+      const playersPts = m.players_points || {};
+      const benchIds = (m.players || []).filter(pid => !starters.includes(pid));
+      const benchTotal = benchIds.reduce((sum, pid) => sum + (playersPts[pid] || 0), 0);
+
+      if (!highest || m.points > highest.points) highest = { points: m.points, teamName, ownerId: oid };
+      if (!lowest || m.points < lowest.points) lowest = { points: m.points, teamName, ownerId: oid };
+      if (!bestBench || benchTotal > bestBench.points) bestBench = { points: benchTotal, teamName, ownerId: oid };
+
+      const starterPts = starters.map(pid => ({ pid, pts: playersPts[pid] || 0 })).sort((a, b) => a.pts - b.pts);
+      const benchPts = benchIds.map(pid => ({ pid, pts: playersPts[pid] || 0 })).sort((a, b) => b.pts - a.pts);
+      if (starterPts.length && benchPts.length) {
+        const worstStarter = starterPts[0];
+        const bestBenchPlayer = benchPts[0];
+        const diff = bestBenchPlayer.pts - worstStarter.pts;
+        if (diff > 0 && (!worstStartSit || diff > worstStartSit.diff)) {
+          const sName = state.players?.[worstStarter.pid]?.full_name || worstStarter.pid;
+          const bName = state.players?.[bestBenchPlayer.pid]?.full_name || bestBenchPlayer.pid;
+          worstStartSit = { diff, teamName, ownerId: oid, sat: bName, satPts: bestBenchPlayer.pts, started: sName, startedPts: worstStarter.pts };
+        }
+      }
+    });
+
+    const cards = [
+      { icon: "🔥", label: "Highest Scorer", value: highest?.points.toFixed(1), who: highest ? teamLink(highest.ownerId, highest.teamName) : "—", meta: `Week ${week}`, featured: true },
+      { icon: "🥶", label: "Lowest Scorer", value: lowest?.points.toFixed(1), who: lowest ? teamLink(lowest.ownerId, lowest.teamName) : "—", meta: `Week ${week}` },
+      { icon: "🪑", label: "Best Bench", value: bestBench?.points.toFixed(1), who: bestBench ? teamLink(bestBench.ownerId, bestBench.teamName) : "—", meta: "points left on the bench" },
+      { icon: "😬", label: "Worst Start/Sit", value: worstStartSit ? `+${worstStartSit.diff.toFixed(1)}` : "—",
+        who: worstStartSit ? teamLink(worstStartSit.ownerId, worstStartSit.teamName) : "—",
+        meta: worstStartSit ? `Sat ${worstStartSit.sat} (${worstStartSit.satPts.toFixed(1)}) for ${worstStartSit.started} (${worstStartSit.startedPts.toFixed(1)})` : "" }
+    ];
+
+    grid.innerHTML = cards.map(c => `
+      <div class="record-card ${c.featured ? "featured" : ""}">
+        <p class="icon">${c.icon}</p>
+        <p class="label">${c.label}</p>
+        <p class="value">${c.value ?? "–"}</p>
+        <p class="who">${c.who ?? "—"}</p>
+        <p class="meta">${c.meta ?? ""}</p>
+      </div>
+    `).join("");
+  } catch (e) {
+    console.error(e);
+    grid.innerHTML = `<p class="loading">Couldn't compute this week's awards.</p>`;
+  }
+}
+
+/* ============================================================
+   PLAYOFF PICTURE — current standings vs. the league's playoff cutoff
+   ============================================================ */
+async function renderPlayoffPicture() {
+  const list = document.getElementById("playoffs-list");
+  try {
+    const current = state.chain[0];
+    const playoffSpots = current.league.settings?.playoff_teams || 6;
+    document.getElementById("playoffs-subhead").textContent =
+      `Top ${playoffSpots} make the playoffs. Regular season standings, live from Sleeper.`;
+
+    list.innerHTML = state.standings.map((r, i) => {
+      const inBubble = i === playoffSpots - 1;
+      const justOut = i === playoffSpots;
+      return `
+        ${i === playoffSpots ? `<li class="playoff-cutline">— playoff cutoff —</li>` : ""}
+        <li class="${i < playoffSpots ? "in-playoffs" : ""}">
+          <span class="rank">${i + 1}</span>
+          ${teamLink(r.ownerId, r.team)}
+          <span class="rec">${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ""}</span>
+          <span class="pct">${r.pf.toFixed(1)} PF</span>
+        </li>`;
+    }).join("");
+  } catch (e) {
+    console.error(e);
+    list.innerHTML = `<li class="loading">Couldn't load the playoff picture.</li>`;
+  }
+}
+
+/* ============================================================
+   RIVALRY BADGES — nemesis / cupcake, shown on each team's page
+   ============================================================ */
+function renderRivalryBadges(ownerId) {
+  const row = document.getElementById("rivalry-row");
+  const records = {};
+  state.games.forEach(g => {
+    if (g.ownerA !== ownerId && g.ownerB !== ownerId) return;
+    const opp = g.ownerA === ownerId ? g.ownerB : g.ownerA;
+    const [myPts, oppPts] = g.ownerA === ownerId ? [g.ptsA, g.ptsB] : [g.ptsB, g.ptsA];
+    records[opp] ||= { w: 0, l: 0 };
+    if (myPts > oppPts) records[opp].w++; else if (oppPts > myPts) records[opp].l++;
+  });
+
+  const entries = Object.entries(records).filter(([, r]) => (r.w + r.l) > 0);
+  if (entries.length === 0) { row.innerHTML = ""; return; }
+
+  const withPct = entries.map(([oid, r]) => ({ oid, ...r, pct: r.w / (r.w + r.l) }));
+  const nemesis = [...withPct].sort((a, b) => a.pct - b.pct || b.l - a.l)[0];
+  const cupcake = [...withPct].sort((a, b) => b.pct - a.pct || b.w - a.w)[0];
+
+  const badge = (title, cls, entry) => entry ? `
+    <div class="rivalry-badge ${cls}">
+      <p class="rlabel">${title}</p>
+      <p class="rname">${teamLink(entry.oid, state.ownerDirectory[entry.oid]?.team || "Unknown")}</p>
+      <p class="rrec">${entry.w}-${entry.l} all-time</p>
+    </div>` : "";
+
+  row.innerHTML = badge("Nemesis", "nemesis", nemesis) + badge("Cupcake", "cupcake", cupcake);
+}
+
+/* ============================================================
    Boot
    ============================================================ */
 (async function init() {
@@ -987,6 +1205,7 @@ async function renderTradeFeed() {
     state.standings = standings;
 
     renderHero(chain, games);
+    renderHeroDates(chain);
     renderStandings(chain, standings);
     setupH2HPicker(games, ownerDirectory);
     renderRecords(chain, games, ownerDirectory);

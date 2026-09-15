@@ -11,6 +11,10 @@
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+<meta name="theme-color" content="#0B0B10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Tnaat Dynasty">
 
 <!-- Link preview (Discord, iMessage, Slack, Twitter/X, etc.) -->
 <meta property="og:type" content="website">
@@ -55,15 +59,19 @@
       <div class="hero-stat"><span class="num" id="stat-managers">–</span><span class="lbl">managers</span></div>
       <div class="hero-stat"><span class="num" id="stat-games">–</span><span class="lbl">matchups played</span></div>
     </div>
+    <p class="hero-dates" id="hero-dates"></p>
   </div>
 </header>
 
 <nav class="tabs" id="tabs">
   <button class="tab active" data-target="standings">Standings</button>
   <button class="tab" data-target="thisweek">This Week</button>
+  <button class="tab" data-target="awards">Weekly Awards</button>
   <button class="tab" data-target="propbets">Prop Bets</button>
   <button class="tab" data-target="power">Power Rankings</button>
+  <button class="tab" data-target="playoffs">Playoff Picture</button>
   <button class="tab" data-target="trades">Trade Feed</button>
+  <button class="tab" data-target="waivers">Waiver Wire</button>
   <button class="tab" data-target="h2h">Head-to-Head</button>
   <button class="tab" data-target="records">Record Book</button>
   <button class="tab" data-target="history">Season History</button>
@@ -123,6 +131,14 @@
     </div>
   </section>
 
+  <section id="awards" class="panel">
+    <h2>Weekly Awards — <span id="awards-week-label">—</span></h2>
+    <p class="section-note">Auto-generated from the most recently completed week.</p>
+    <div class="record-grid" id="awards-grid">
+      <div class="loading">Handing out trophies…</div>
+    </div>
+  </section>
+
   <section id="power" class="panel">
     <h2>Dynasty Power Rankings</h2>
     <p class="section-note">Superflex, PPR, dynasty player values via <a href="https://fantasycalc.com" target="_blank" rel="noopener">FantasyCalc</a> — reflects current market value, updated continuously.</p>
@@ -134,11 +150,27 @@
     </div>
   </section>
 
+  <section id="playoffs" class="panel">
+    <h2>Playoff Picture</h2>
+    <p class="section-note" id="playoffs-subhead">If the season ended today.</p>
+    <ol class="rankings-list" id="playoffs-list">
+      <li class="loading">Seeding the bracket…</li>
+    </ol>
+  </section>
+
   <section id="trades" class="panel">
     <h2>Trade Feed</h2>
     <p class="section-note">Every trade on record, straight from Sleeper's transaction log.</p>
     <div class="trade-feed" id="trade-feed">
       <div class="loading">Pulling the trade log…</div>
+    </div>
+  </section>
+
+  <section id="waivers" class="panel">
+    <h2>Waiver Wire</h2>
+    <p class="section-note">Every add and drop this season, straight from Sleeper's transaction log.</p>
+    <div class="trade-feed" id="waiver-feed">
+      <div class="loading">Pulling the waiver log…</div>
     </div>
   </section>
 
@@ -174,6 +206,7 @@
       <button class="btn back-btn" id="team-back">← All Teams</button>
       <h2 id="team-detail-name">—</h2>
       <p class="section-note" id="team-detail-meta"></p>
+      <div class="rivalry-row" id="rivalry-row"></div>
       <div class="table-wrap">
         <table id="roster-table">
           <thead><tr><th>Player</th><th>Pos</th><th>NFL Team</th><th>Acquired</th></tr></thead>
