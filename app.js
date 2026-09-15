@@ -5,27 +5,38 @@
 const LEAGUE_ID = "1315463764962721792";
 const API = "https://api.sleeper.app/v1";
 
-/* ---------- tiny fetch helper ---------- */
+const state = {
+  chain: null,
+  games: null,
+  standings: null,      // current-season standings, ranked
+  lastPlaceOwner: null, // owner_id sitting in last place right now
+  ownerDirectory: null, // owner_id -> {name, team, avatar}
+  players: null,        // Sleeper's NFL player dictionary, loaded lazily
+  loaded: {}            // tracks which lazy tabs have already fetched their data
+};
+
 async function getJSON(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Sleeper API error on ${url}: ${res.status}`);
   return res.json();
 }
 
-/* ---------- tab switching ---------- */
+/* ---------- tabs ---------- */
 document.querySelectorAll(".tab").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
-    document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-    btn.classList.add("active");
-    document.getElementById(btn.dataset.target).classList.add("active");
-  });
+  btn.addEventListener("click", () => switchTab(btn.dataset.target));
 });
+function switchTab(target) {
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.target === target));
+  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id === target));
+  if (target === "teams") loadPlayersIfNeeded();
+  if (target === "thisweek" && !state.loaded.thisweek) { state.loaded.thisweek = true; renderThisWeek(); }
+  if (target === "propbets" && !state.loaded.propbets) { state.loaded.propbets = true; renderPropBets(); }
+  if (target === "power" && !state.loaded.power) { state.loaded.power = true; renderPowerRankings(); }
+  if (target === "trades" && !state.loaded.trades) { state.loaded.trades = true; renderTradeFeed(); }
+}
 
 /* ============================================================
-   1. Walk the league's history backwards via previous_league_id
-      so every season, ever, gets pulled in automatically —
-      including new seasons Sleeper creates in future years.
+   League + matchup history (unchanged core: walks previous_league_id)
    ============================================================ */
 async function loadLeagueChain(startId) {
   const chain = [];
@@ -39,26 +50,22 @@ async function loadLeagueChain(startId) {
     chain.push({ league, users, rosters });
     currentId = league.previous_league_id;
   }
-  return chain; // chain[0] = current season, last entry = oldest season
+  return chain;
 }
 
-/* ---------- resolve a display name for a roster in a given season ---------- */
-function ownerName(season, rosterId) {
+function ownerKey(season, rosterId) {
+  const roster = season.rosters.find(r => r.roster_id === rosterId);
+  return roster ? roster.owner_id : `unknown-${rosterId}`;
+}
+function ownerNameInSeason(season, rosterId) {
   const roster = season.rosters.find(r => r.roster_id === rosterId);
   if (!roster) return "Unknown";
   const user = season.users.find(u => u.user_id === roster.owner_id);
   return user ? (user.metadata?.team_name || user.display_name) : "Unknown Manager";
 }
-function ownerKey(season, rosterId) {
-  const roster = season.rosters.find(r => r.roster_id === rosterId);
-  return roster ? roster.owner_id : `unknown-${rosterId}`;
-}
 
-/* ============================================================
-   2. Pull every matchup, every week, every season in the chain.
-   ============================================================ */
 async function loadAllMatchups(chain) {
-  const games = []; // { season, week, ownerA, ownerB, ptsA, ptsB }
+  const games = [];
   for (const season of chain) {
     const weekPromises = [];
     for (let wk = 1; wk <= 18; wk++) {
@@ -84,8 +91,8 @@ async function loadAllMatchups(chain) {
           week: wk,
           ownerA: ownerKey(season, a.roster_id),
           ownerB: ownerKey(season, b.roster_id),
-          nameA: ownerName(season, a.roster_id),
-          nameB: ownerName(season, b.roster_id),
+          nameA: ownerNameInSeason(season, a.roster_id),
+          nameB: ownerNameInSeason(season, b.roster_id),
           ptsA: a.points || 0,
           ptsB: b.points || 0
         });
@@ -95,9 +102,44 @@ async function loadAllMatchups(chain) {
   return games;
 }
 
+/* ---------- build a directory of every manager ever seen ---------- */
+function buildOwnerDirectory(chain) {
+  const dir = {};
+  // walk oldest -> newest so the most recent season's info wins
+  [...chain].reverse().forEach(season => {
+    season.rosters.forEach(r => {
+      const user = season.users.find(u => u.user_id === r.owner_id);
+      dir[r.owner_id] = {
+        name: user ? user.display_name : "Unknown Manager",
+        team: user?.metadata?.team_name || user?.display_name || "Unnamed Team",
+        avatar: user?.avatar ? `https://sleepercdn.com/avatars/thumbs/${user.avatar}` : null
+      };
+    });
+  });
+  return dir;
+}
+
 /* ============================================================
-   3. Render: hero stat ribbon
+   Current standings (also used to find the last-place team)
    ============================================================ */
+function computeStandings(chain) {
+  const current = chain[0];
+  const rows = current.rosters.map(r => {
+    const user = current.users.find(u => u.user_id === r.owner_id);
+    return {
+      ownerId: r.owner_id,
+      manager: user ? user.display_name : "Unknown",
+      team: user?.metadata?.team_name || "—",
+      wins: r.settings?.wins ?? 0,
+      losses: r.settings?.losses ?? 0,
+      ties: r.settings?.ties ?? 0,
+      pf: (r.settings?.fpts ?? 0) + (r.settings?.fpts_decimal ?? 0) / 100,
+      pa: (r.settings?.fpts_against ?? 0) + (r.settings?.fpts_against_decimal ?? 0) / 100
+    };
+  }).sort((a, b) => b.wins - a.wins || b.pf - a.pf);
+  return rows;
+}
+
 function renderHero(chain, games) {
   const allOwners = new Set();
   chain.forEach(s => s.rosters.forEach(r => allOwners.add(r.owner_id)));
@@ -108,27 +150,8 @@ function renderHero(chain, games) {
   if (oldestSeason) document.getElementById("hero-founded").textContent = oldestSeason;
 }
 
-/* ============================================================
-   4. Render: current standings
-   ============================================================ */
-function renderStandings(chain) {
-  const current = chain[0];
-  document.getElementById("standings-season").textContent = current.league.season;
-  const rows = current.rosters
-    .map(r => {
-      const user = current.users.find(u => u.user_id === r.owner_id);
-      return {
-        manager: user ? user.display_name : "Unknown",
-        team: user?.metadata?.team_name || "—",
-        wins: r.settings?.wins ?? 0,
-        losses: r.settings?.losses ?? 0,
-        ties: r.settings?.ties ?? 0,
-        pf: (r.settings?.fpts ?? 0) + (r.settings?.fpts_decimal ?? 0) / 100,
-        pa: (r.settings?.fpts_against ?? 0) + (r.settings?.fpts_against_decimal ?? 0) / 100
-      };
-    })
-    .sort((a, b) => b.wins - a.wins || b.pf - a.pf);
-
+function renderStandings(chain, rows) {
+  document.getElementById("standings-season").textContent = chain[0].league.season;
   document.getElementById("standings-body").innerHTML = rows.map((r, i) => `
     <tr>
       <td>${i + 1}</td>
@@ -142,106 +165,241 @@ function renderStandings(chain) {
 }
 
 /* ============================================================
-   5. Render: all-time head-to-head grid
+   Head-to-head picker
    ============================================================ */
-function renderH2H(games) {
-  const names = {}; // ownerId -> display name (most recent seen wins)
-  const record = {}; // "a|b" -> {w,l}
-  games.forEach(g => {
-    names[g.ownerA] = g.nameA;
-    names[g.ownerB] = g.nameB;
-    const key1 = `${g.ownerA}|${g.ownerB}`;
-    const key2 = `${g.ownerB}|${g.ownerA}`;
-    record[key1] ||= { w: 0, l: 0 };
-    record[key2] ||= { w: 0, l: 0 };
-    if (g.ptsA > g.ptsB) { record[key1].w++; record[key2].l++; }
-    else if (g.ptsB > g.ptsA) { record[key2].w++; record[key1].l++; }
-  });
+function setupH2HPicker(games, ownerDirectory) {
+  const owners = Object.keys(ownerDirectory).sort((a, b) =>
+    ownerDirectory[a].name.localeCompare(ownerDirectory[b].name)
+  );
+  const optionHTML = owners.map(id => `<option value="${id}">${ownerDirectory[id].name}</option>`).join("");
+  const selA = document.getElementById("h2h-team-a");
+  const selB = document.getElementById("h2h-team-b");
+  selA.innerHTML = optionHTML;
+  selB.innerHTML = optionHTML;
+  if (owners.length > 1) selB.selectedIndex = 1;
 
-  const owners = Object.keys(names).sort((a, b) => names[a].localeCompare(names[b]));
-  const table = document.getElementById("h2h-table");
-  const thead = `<thead><tr><th class="row-label"></th>${owners.map(o => `<th>${names[o]}</th>`).join("")}</tr></thead>`;
-  const tbody = owners.map(rowOwner => {
-    const cells = owners.map(colOwner => {
-      if (rowOwner === colOwner) return `<td class="self">—</td>`;
-      const rec = record[`${rowOwner}|${colOwner}`] || { w: 0, l: 0 };
-      const cls = rec.w >= rec.l ? "win" : "loss";
-      return `<td class="${cls}">${rec.w}-${rec.l}</td>`;
-    }).join("");
-    return `<tr><td class="row-label">${names[rowOwner]}</td>${cells}</tr>`;
+  document.getElementById("h2h-compare").addEventListener("click", () => {
+    renderH2HResult(games, ownerDirectory, selA.value, selB.value);
+  });
+  // auto-run once so the panel isn't empty on first visit
+  renderH2HResult(games, ownerDirectory, selA.value, selB.value);
+}
+
+function renderH2HResult(games, ownerDirectory, idA, idB) {
+  const box = document.getElementById("h2h-result");
+  if (idA === idB) {
+    box.innerHTML = `<p class="section-note">Pick two different managers.</p>`;
+    return;
+  }
+  const meetings = games.filter(g =>
+    (g.ownerA === idA && g.ownerB === idB) || (g.ownerA === idB && g.ownerB === idA)
+  ).sort((a, b) => a.season - b.season || a.week - b.week);
+
+  if (meetings.length === 0) {
+    box.innerHTML = `<p class="section-note">${ownerDirectory[idA].name} and ${ownerDirectory[idB].name} haven't played each other yet.</p>`;
+    return;
+  }
+
+  let winsA = 0, winsB = 0, ptsA = 0, ptsB = 0;
+  const rows = meetings.map(g => {
+    const [scoreA, scoreB] = g.ownerA === idA ? [g.ptsA, g.ptsB] : [g.ptsB, g.ptsA];
+    ptsA += scoreA; ptsB += scoreB;
+    if (scoreA > scoreB) winsA++; else if (scoreB > scoreA) winsB++;
+    return `<tr>
+      <td>${g.season}, Wk ${g.week}</td>
+      <td class="num">${scoreA.toFixed(1)}</td>
+      <td class="num">${scoreB.toFixed(1)}</td>
+      <td>${scoreA > scoreB ? ownerDirectory[idA].name : scoreB > scoreA ? ownerDirectory[idB].name : "Tie"}</td>
+    </tr>`;
   }).join("");
-  table.innerHTML = thead + `<tbody>${tbody}</tbody>`;
+
+  box.innerHTML = `
+    <div class="h2h-summary">
+      <div><span class="num">${winsA}-${winsB}</span><span class="lbl">${ownerDirectory[idA].name}'s record</span></div>
+      <div><span class="num">${(ptsA / meetings.length).toFixed(1)}</span><span class="lbl">${ownerDirectory[idA].name} avg pts</span></div>
+      <div><span class="num">${(ptsB / meetings.length).toFixed(1)}</span><span class="lbl">${ownerDirectory[idB].name} avg pts</span></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Meeting</th><th>${ownerDirectory[idA].name}</th><th>${ownerDirectory[idB].name}</th><th>Winner</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
 }
 
 /* ============================================================
-   6. Render: record book
+   Record book — 6 records + all-time power rankings
    ============================================================ */
-function renderRecords(chain, games) {
-  // Most points in a single game
-  let best = null;
+function renderRecords(chain, games, ownerDirectory) {
+  // every team-game performance, for the "most points in a game" leaderboard
+  const allGamePoints = [];
+  const allShootouts = [];
   games.forEach(g => {
-    if (!best || g.ptsA > best.pts) best = { pts: g.ptsA, who: g.nameA, season: g.season, week: g.week };
-    if (!best || g.ptsB > best.pts) best = { pts: g.ptsB, who: g.nameB, season: g.season, week: g.week };
+    allGamePoints.push({ value: g.ptsA, who: g.nameA, meta: `${g.season}, Week ${g.week}` });
+    allGamePoints.push({ value: g.ptsB, who: g.nameB, meta: `${g.season}, Week ${g.week}` });
+    allShootouts.push({ value: g.ptsA + g.ptsB, who: `${g.nameA} vs ${g.nameB}`, meta: `${g.season}, Week ${g.week}` });
   });
+  allGamePoints.sort((a, b) => b.value - a.value);
+  allShootouts.sort((a, b) => b.value - a.value);
 
-  // Best single-season points total, from roster settings across the chain
-  let bestSeason = null;
+  // every team-season total, for the "best season" leaderboard
+  const allSeasonPF = [];
   chain.forEach(s => {
     s.rosters.forEach(r => {
       const user = s.users.find(u => u.user_id === r.owner_id);
       const pf = (r.settings?.fpts ?? 0) + (r.settings?.fpts_decimal ?? 0) / 100;
-      if (!bestSeason || pf > bestSeason.pf) {
-        bestSeason = { pf, who: user?.display_name || "Unknown", season: s.league.season };
-      }
+      allSeasonPF.push({ value: pf, who: user?.display_name || "Unknown", meta: s.league.season });
     });
   });
+  allSeasonPF.sort((a, b) => b.value - a.value);
 
-  // Longest win streak, all-time, per manager (chronological by season+week)
+  // longest win streak per owner (best streak each manager has ever put together)
   const sorted = [...games].sort((a, b) => a.season - b.season || a.week - b.week);
   const current = {}; const longest = {};
   sorted.forEach(g => {
     const winner = g.ptsA > g.ptsB ? g.ownerA : (g.ptsB > g.ptsA ? g.ownerB : null);
-    const loser = g.ptsA > g.ptsB ? g.ownerB : (g.ptsB > g.ptsA ? g.ownerA : null);
-    const winnerName = g.ptsA > g.ptsB ? g.nameA : g.nameB;
     if (winner) {
       current[winner] = (current[winner] || 0) + 1;
-      if (current[winner] > (longest[winner]?.count || 0)) longest[winner] = { count: current[winner], name: winnerName };
+      if (current[winner] > (longest[winner]?.count || 0)) longest[winner] = { count: current[winner] };
+      Object.keys(current).forEach(k => { if (k !== winner) current[k] = 0; });
+    } else {
+      Object.keys(current).forEach(k => current[k] = 0);
     }
-    if (loser) current[loser] = 0;
   });
-  const bestStreak = Object.values(longest).sort((a, b) => b.count - a.count)[0];
+  const allStreaks = Object.entries(longest)
+    .map(([ownerId, v]) => ({ value: v.count, who: ownerDirectory[ownerId]?.name || "Unknown", meta: "consecutive wins" }))
+    .sort((a, b) => b.value - a.value);
 
-  // Most all-time wins
+  // all-time wins per owner
   const winCounts = {};
+  const gameCounts = {};
   games.forEach(g => {
+    gameCounts[g.ownerA] = (gameCounts[g.ownerA] || 0) + 1;
+    gameCounts[g.ownerB] = (gameCounts[g.ownerB] || 0) + 1;
     const winner = g.ptsA > g.ptsB ? g.ownerA : (g.ptsB > g.ptsA ? g.ownerB : null);
-    const winnerName = g.ptsA > g.ptsB ? g.nameA : g.nameB;
-    if (winner) {
-      winCounts[winner] ||= { count: 0, name: winnerName };
-      winCounts[winner].count++;
-    }
+    if (winner) winCounts[winner] = (winCounts[winner] || 0) + 1;
   });
-  const mostWins = Object.values(winCounts).sort((a, b) => b.count - a.count)[0];
+  const allWins = Object.entries(winCounts)
+    .map(([ownerId, count]) => ({ value: count, who: ownerDirectory[ownerId]?.name || "Unknown", meta: "regular + postseason" }))
+    .sort((a, b) => b.value - a.value);
+
+  // stash full leaderboards for the click-through modal
+  state.leaderboards = {
+    pointsGame: { title: "Most Points, Single Game", rows: allGamePoints, format: v => v.toFixed(1) },
+    shootout: { title: "Highest-Scoring Shootouts", rows: allShootouts, format: v => v.toFixed(1) },
+    bestSeason: { title: "Best Single Seasons (PF)", rows: allSeasonPF, format: v => v.toFixed(1) },
+    streak: { title: "Longest Win Streaks", rows: allStreaks, format: v => v },
+    wins: { title: "Most All-Time Wins", rows: allWins, format: v => v },
+    champs: { title: "Most Championships", rows: [], format: v => v } // filled in once bracket data resolves
+  };
 
   const cards = [
-    { label: "Most Points, Single Game", value: best?.pts.toFixed(1), who: best?.who, meta: `${best?.season}, Week ${best?.week}` },
-    { label: "Best Single Season (PF)", value: bestSeason?.pf.toFixed(1), who: bestSeason?.who, meta: bestSeason?.season },
-    { label: "Longest Win Streak", value: bestStreak?.count, who: bestStreak?.name, meta: "consecutive wins" },
-    { label: "Most All-Time Wins", value: mostWins?.count, who: mostWins?.name, meta: "regular + postseason" }
+    { key: "pointsGame", label: "Most Points, Single Game", value: allGamePoints[0]?.value.toFixed(1), who: allGamePoints[0]?.who, meta: allGamePoints[0]?.meta },
+    { key: "shootout", label: "Highest-Scoring Shootout", value: allShootouts[0]?.value.toFixed(1), who: allShootouts[0]?.who, meta: allShootouts[0]?.meta },
+    { key: "bestSeason", label: "Best Single Season (PF)", value: allSeasonPF[0]?.value.toFixed(1), who: allSeasonPF[0]?.who, meta: allSeasonPF[0]?.meta },
+    { key: "streak", label: "Longest Win Streak", value: allStreaks[0]?.value, who: allStreaks[0]?.who, meta: allStreaks[0]?.meta },
+    { key: "wins", label: "Most All-Time Wins", value: allWins[0]?.value, who: allWins[0]?.who, meta: allWins[0]?.meta },
+    { key: "champs", label: "Most Championships", value: "—", who: "—", meta: "loading…", id: "champ-record-card" }
   ];
 
   document.getElementById("record-grid").innerHTML = cards.map(c => `
-    <div class="record-card">
+    <button class="record-card" data-key="${c.key}" ${c.id ? `id="${c.id}"` : ""}>
       <p class="label">${c.label}</p>
       <p class="value">${c.value ?? "–"}</p>
       <p class="who">${c.who ?? "—"}</p>
       <p class="meta">${c.meta ?? ""}</p>
-    </div>
+    </button>
   `).join("");
+
+  document.querySelectorAll(".record-card").forEach(card => {
+    card.addEventListener("click", () => openRecordModal(card.dataset.key));
+  });
+
+  // championships, from each season's winners bracket final
+  renderChampionshipRecord(chain, ownerDirectory);
+
+  // all-time power rankings, by win percentage
+  const allOwnerIds = Object.keys(ownerDirectory);
+  const rankings = allOwnerIds.map(id => {
+    const w = winCounts[id] || 0;
+    const total = gameCounts[id] || 0;
+    return { id, name: ownerDirectory[id].name, wins: w, losses: total - w, pct: total ? w / total : 0 };
+  }).sort((a, b) => b.pct - a.pct || b.wins - a.wins);
+
+  document.getElementById("rankings-list").innerHTML = rankings.map((r, i) => `
+    <li>
+      <span class="rank">${i + 1}</span>
+      <a href="#" data-owner="${r.id}" class="ranking-link">${r.name}</a>
+      <span class="rec">${r.wins}-${r.losses}</span>
+      <span class="pct">${(r.pct * 100).toFixed(0)}%</span>
+    </li>
+  `).join("");
+
+  document.querySelectorAll(".ranking-link").forEach(a => {
+    a.addEventListener("click", e => {
+      e.preventDefault();
+      switchTab("teams");
+      openTeamDetail(a.dataset.owner);
+    });
+  });
 }
 
+async function renderChampionshipRecord(chain, ownerDirectory) {
+  const counts = {};
+  await Promise.all(chain.map(async season => {
+    try {
+      const bracket = await getJSON(`${API}/league/${season.league.league_id}/winners_bracket`);
+      const final = bracket.find(m => m.p === 1);
+      if (final && final.w) {
+        const ownerId = ownerKey(season, final.w);
+        counts[ownerId] = (counts[ownerId] || 0) + 1;
+      }
+    } catch (e) { /* season likely still in progress */ }
+  }));
+  const ranked = Object.entries(counts)
+    .map(([ownerId, count]) => ({ value: count, who: ownerDirectory[ownerId]?.name || "Unknown", meta: count === 1 ? "title" : "titles" }))
+    .sort((a, b) => b.value - a.value);
+  if (state.leaderboards) state.leaderboards.champs.rows = ranked;
+
+  const card = document.getElementById("champ-record-card");
+  if (!card) return;
+  if (ranked[0]) {
+    card.querySelector(".value").textContent = ranked[0].value;
+    card.querySelector(".who").textContent = ranked[0].who;
+    card.querySelector(".meta").textContent = ranked[0].meta;
+  } else {
+    card.querySelector(".value").textContent = "–";
+    card.querySelector(".meta").textContent = "no champion recorded yet";
+  }
+}
+
+/* ---------- record leaderboard modal (top 12) ---------- */
+function openRecordModal(key) {
+  const board = state.leaderboards?.[key];
+  if (!board) return;
+  document.getElementById("modal-title").textContent = board.title;
+  const top12 = board.rows.slice(0, 12);
+  document.getElementById("modal-list").innerHTML = top12.length
+    ? top12.map((r, i) => `
+        <li>
+          <span class="rank">${i + 1}</span>
+          <span>${r.who}</span>
+          <span class="rec">${r.meta}</span>
+          <span class="pct">${board.format(r.value)}</span>
+        </li>`).join("")
+    : `<li class="loading">No data yet for this record.</li>`;
+  document.getElementById("record-modal").classList.remove("hidden");
+}
+function closeRecordModal() {
+  document.getElementById("record-modal").classList.add("hidden");
+}
+document.getElementById("modal-close").addEventListener("click", closeRecordModal);
+document.getElementById("record-modal").addEventListener("click", e => {
+  if (e.target.id === "record-modal") closeRecordModal();
+});
+
 /* ============================================================
-   7. Render: season-by-season history + champions
+   Season-by-season history
    ============================================================ */
 async function renderHistory(chain) {
   const items = await Promise.all(chain.map(async season => {
@@ -250,10 +408,10 @@ async function renderHistory(chain) {
       const bracket = await getJSON(`${API}/league/${season.league.league_id}/winners_bracket`);
       const final = bracket.find(m => m.p === 1);
       if (final && final.w) {
-        champ = ownerName(season, final.w);
-        runnerUp = final.l ? ownerName(season, final.l) : null;
+        champ = ownerNameInSeason(season, final.w);
+        runnerUp = final.l ? ownerNameInSeason(season, final.l) : null;
       }
-    } catch (e) { /* season may still be in progress */ }
+    } catch (e) { /* in progress */ }
     return { year: season.league.season, champ, runnerUp, status: season.league.status };
   }));
 
@@ -268,16 +426,450 @@ async function renderHistory(chain) {
 }
 
 /* ============================================================
+   Teams grid + roster detail (with acquisition history) +
+   the last-place poop easter egg
+   ============================================================ */
+function renderTeamsGrid(standings, ownerDirectory, chain) {
+  // standings gives current ranking for owners active this season;
+  // append any historical-only owners at the end, unranked.
+  const rankedIds = standings.map(r => r.ownerId);
+  const allIds = Object.keys(ownerDirectory);
+  const unranked = allIds.filter(id => !rankedIds.includes(id));
+  state.lastPlaceOwner = rankedIds[rankedIds.length - 1] || null;
+
+  const cardsHTML = [...rankedIds, ...unranked].map((id, i) => {
+    const o = ownerDirectory[id];
+    const rankLabel = i < rankedIds.length ? `#${i + 1} this season` : "past manager";
+    return `
+      <button class="team-card" data-owner="${id}">
+        ${o.avatar ? `<img class="avatar" src="${o.avatar}" alt="">` : `<div class="avatar"></div>`}
+        <p class="tname">${o.team}</p>
+        <p class="mname">${o.name}</p>
+        <p class="rank-badge">${rankLabel}</p>
+      </button>`;
+  }).join("");
+
+  document.getElementById("team-grid").innerHTML = cardsHTML;
+  document.querySelectorAll(".team-card").forEach(card => {
+    card.addEventListener("click", () => openTeamDetail(card.dataset.owner));
+  });
+}
+
+async function loadPlayersIfNeeded() {
+  if (state.players) return;
+  document.querySelectorAll("#roster-body .loading").forEach(el => el.textContent = "Loading NFL player database (one-time, ~10 seconds)…");
+  try {
+    state.players = await getJSON(`${API}/players/nfl`);
+  } catch (e) {
+    state.players = {};
+  }
+}
+
+async function openTeamDetail(ownerId) {
+  const o = state.ownerDirectory[ownerId];
+  document.getElementById("teams-grid-view").classList.add("hidden");
+  document.getElementById("team-detail-view").classList.remove("hidden");
+  document.getElementById("team-detail-name").textContent = o.team;
+  document.getElementById("team-detail-meta").textContent = `Managed by ${o.name}`;
+  document.getElementById("roster-body").innerHTML = `<tr><td colspan="4" class="loading">Loading roster…</td></tr>`;
+
+  // the poop easter egg — only for whoever is currently in last place
+  if (ownerId === state.lastPlaceOwner) {
+    const overlay = document.getElementById("poop-overlay");
+    overlay.classList.add("show");
+    setTimeout(() => overlay.classList.remove("show"), 1000);
+  }
+
+  await loadPlayersIfNeeded();
+  await renderRoster(ownerId);
+}
+
+document.getElementById("team-back").addEventListener("click", () => {
+  document.getElementById("team-detail-view").classList.add("hidden");
+  document.getElementById("teams-grid-view").classList.remove("hidden");
+});
+
+async function renderRoster(ownerId) {
+  const current = state.chain[0];
+  const roster = current.rosters.find(r => r.owner_id === ownerId);
+  if (!roster || !roster.players || roster.players.length === 0) {
+    document.getElementById("roster-body").innerHTML = `<tr><td colspan="4" class="loading">No active roster found for this manager this season.</td></tr>`;
+    return;
+  }
+
+  // draft picks for this season, so we can label "Drafted" for anyone
+  // not found in the transaction log
+  let draftedMap = {};
+  try {
+    const drafts = await getJSON(`${API}/league/${current.league.league_id}/drafts`);
+    if (drafts[0]) {
+      const picks = await getJSON(`${API}/draft/${drafts[0].draft_id}/picks`);
+      picks.forEach(p => {
+        draftedMap[p.player_id] = `Drafted — Rd ${p.round}, Pick ${p.pick_no}`;
+      });
+    }
+  } catch (e) { /* no draft data available */ }
+
+  // transactions across the season, most recent first, to find how each
+  // rostered player actually arrived on THIS roster
+  let acquiredMap = {};
+  try {
+    const weekTx = await Promise.all(
+      Array.from({ length: 18 }, (_, i) => i + 1).map(wk =>
+        getJSON(`${API}/league/${current.league.league_id}/transactions/${wk}`).catch(() => [])
+      )
+    );
+    const allTx = weekTx.flat().filter(t => t.status === "complete").sort((a, b) => (b.created || 0) - (a.created || 0));
+    allTx.forEach(tx => {
+      if (!tx.adds) return;
+      Object.entries(tx.adds).forEach(([playerId, rosterId]) => {
+        if (rosterId !== roster.roster_id) return;
+        if (acquiredMap[playerId]) return; // keep the most recent (list is newest-first)
+        if (tx.type === "trade") acquiredMap[playerId] = "Acquired via trade";
+        else if (tx.type === "waiver") acquiredMap[playerId] = "Added via waiver";
+        else if (tx.type === "free_agent") acquiredMap[playerId] = "Added as free agent";
+        else acquiredMap[playerId] = "Added";
+      });
+    });
+  } catch (e) { /* no transaction data available */ }
+
+  const rows = roster.players.map(pid => {
+    const p = state.players[pid];
+    const name = p ? (p.full_name || `${p.first_name || ""} ${p.last_name || ""}`.trim()) : pid;
+    const pos = p?.position || "—";
+    const team = p?.team || "FA";
+    const acquired = acquiredMap[pid] || draftedMap[pid] || "On roster since before recorded transactions";
+    return `<tr><td>${name}</td><td>${pos}</td><td>${team}</td><td>${acquired}</td></tr>`;
+  }).sort().join("");
+
+  document.getElementById("roster-body").innerHTML = rows;
+}
+
+/* ============================================================
+   THIS WEEK — matchup hype cards + full lineup detail
+   ============================================================ */
+async function renderThisWeek() {
+  const grid = document.getElementById("hype-grid");
+  try {
+    const nflState = await getJSON(`${API}/state/nfl`);
+    const week = nflState.week || 1;
+    const current = state.chain[0];
+    document.getElementById("thisweek-subhead").textContent = `${current.league.season}, Week ${week}`;
+
+    const matchups = await getJSON(`${API}/league/${current.league.league_id}/matchups/${week}`).catch(() => []);
+    const byMatchup = {};
+    matchups.forEach(m => { if (m.matchup_id != null) (byMatchup[m.matchup_id] ||= []).push(m); });
+    const pairs = Object.values(byMatchup).filter(p => p.length === 2);
+
+    if (pairs.length === 0) {
+      grid.innerHTML = `<p class="loading">No matchups posted for this week yet.</p>`;
+      return;
+    }
+
+    state.thisWeekPairs = { week, pairs };
+
+    grid.innerHTML = pairs.map((pair, i) => {
+      const [a, b] = pair;
+      const ownerA = ownerKey(current, a.roster_id);
+      const ownerB = ownerKey(current, b.roster_id);
+      const nameA = state.ownerDirectory[ownerA]?.team || "Team A";
+      const nameB = state.ownerDirectory[ownerB]?.team || "Team B";
+      const fact = buildFunFact(ownerA, ownerB, nameA, nameB);
+      return `
+        <div class="hype-card">
+          <p class="matchup-title">${nameA} vs ${nameB}</p>
+          <p class="fun-fact">${fact}</p>
+          <button class="btn" data-idx="${i}">View Full Matchup</button>
+        </div>`;
+    }).join("");
+
+    grid.querySelectorAll("button[data-idx]").forEach(btn => {
+      btn.addEventListener("click", () => openMatchupDetail(parseInt(btn.dataset.idx, 10)));
+    });
+  } catch (e) {
+    console.error(e);
+    grid.innerHTML = `<p class="loading">Couldn't load this week's matchups.</p>`;
+  }
+}
+
+function buildFunFact(ownerA, ownerB, nameA, nameB) {
+  const meetings = state.games.filter(g =>
+    (g.ownerA === ownerA && g.ownerB === ownerB) || (g.ownerA === ownerB && g.ownerB === ownerA)
+  ).sort((a, b) => a.season - b.season || a.week - b.week);
+
+  if (meetings.length === 0) return "First-ever meeting between these two managers.";
+
+  let winsA = 0, winsB = 0, biggestMargin = null;
+  meetings.forEach(g => {
+    const [scoreA, scoreB] = g.ownerA === ownerA ? [g.ptsA, g.ptsB] : [g.ptsB, g.ptsA];
+    if (scoreA > scoreB) winsA++; else if (scoreB > scoreA) winsB++;
+    const margin = Math.abs(scoreA - scoreB);
+    if (!biggestMargin || margin > biggestMargin.margin) {
+      biggestMargin = { margin, winner: scoreA > scoreB ? nameA : nameB, season: g.season, week: g.week };
+    }
+  });
+  const last = meetings[meetings.length - 1];
+  const [lastA, lastB] = last.ownerA === ownerA ? [last.ptsA, last.ptsB] : [last.ptsB, last.ptsA];
+  const lastWinner = lastA > lastB ? nameA : lastB > lastA ? nameB : "Tie";
+  const leader = winsA > winsB ? `${nameA} leads the series ${winsA}-${winsB}`
+    : winsB > winsA ? `${nameB} leads the series ${winsB}-${winsA}`
+    : `Series tied ${winsA}-${winsB}`;
+
+  return `${leader} · last met ${last.season} Wk ${last.week} (${lastWinner} won) · biggest margin ${biggestMargin.margin.toFixed(1)} pts (${biggestMargin.winner}, ${biggestMargin.season} Wk ${biggestMargin.week}).`;
+}
+
+function openMatchupDetail(idx) {
+  const { week, pairs } = state.thisWeekPairs;
+  const [a, b] = pairs[idx];
+  const current = state.chain[0];
+  const ownerA = ownerKey(current, a.roster_id);
+  const ownerB = ownerKey(current, b.roster_id);
+  const nameA = state.ownerDirectory[ownerA]?.team || "Team A";
+  const nameB = state.ownerDirectory[ownerB]?.team || "Team B";
+
+  document.getElementById("thisweek-list-view").classList.add("hidden");
+  document.getElementById("matchup-detail-view").classList.remove("hidden");
+  document.getElementById("matchup-detail-title").textContent = `${nameA} vs ${nameB} — Week ${week}`;
+  document.getElementById("matchup-detail-fact").textContent = buildFunFact(ownerA, ownerB, nameA, nameB);
+
+  const lineupHTML = (entry, name) => {
+    const starters = entry.starters || [];
+    const rows = starters.map(pid => {
+      const p = state.players?.[pid];
+      const label = p ? (p.full_name || pid) : pid;
+      const pos = p?.position || "";
+      const pts = entry.players_points?.[pid];
+      return `<tr><td>${label}</td><td>${pos}</td><td class="num">${pts != null ? pts.toFixed(1) : "TBD"}</td></tr>`;
+    }).join("");
+    return `
+      <div>
+        <h3>${name} — ${entry.points != null ? entry.points.toFixed(1) : "0.0"} pts</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Player</th><th>Pos</th><th>Pts</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="3" class="loading">Lineup not set yet</td></tr>`}</tbody>
+        </table></div>
+      </div>`;
+  };
+
+  const render = () => {
+    document.getElementById("lineup-columns").innerHTML = lineupHTML(a, nameA) + lineupHTML(b, nameB);
+  };
+  if (!state.players) loadPlayersIfNeeded().then(render);
+  else render();
+}
+
+document.getElementById("matchup-back").addEventListener("click", () => {
+  document.getElementById("matchup-detail-view").classList.add("hidden");
+  document.getElementById("thisweek-list-view").classList.remove("hidden");
+});
+
+/* ============================================================
+   PROP BETS — manually curated each week in props-data.js,
+   voted on by the whole league via a shared Netlify Function
+   ============================================================ */
+async function renderPropBets() {
+  const list = document.getElementById("prop-list");
+  const data = window.WEEKLY_PROPS;
+  if (!data || !data.bets || data.bets.length === 0) {
+    list.innerHTML = `<p class="loading">No prop bets loaded for this week yet.</p>`;
+    return;
+  }
+  document.getElementById("propbets-subhead").textContent =
+    `AI-generated prop bets for ${data.week}. Cast your vote — tallies are shared with the whole league.`;
+
+  let tallies = {};
+  try {
+    const res = await fetch(`/api/votes?week=${encodeURIComponent(data.week)}`);
+    tallies = await res.json();
+  } catch (e) { /* voting API not reachable yet — still show the bets */ }
+
+  list.innerHTML = data.bets.map(bet => `
+    <div class="prop-card" data-id="${bet.id}">
+      <p class="question">${bet.question}</p>
+      <div class="prop-options">
+        <button class="prop-option" data-option="A">
+          <span class="fill"></span><span class="opt-label">${bet.optionA}</span><span class="opt-pct"></span>
+        </button>
+        <button class="prop-option" data-option="B">
+          <span class="fill"></span><span class="opt-label">${bet.optionB}</span><span class="opt-pct"></span>
+        </button>
+      </div>
+    </div>
+  `).join("");
+
+  document.querySelectorAll(".prop-card").forEach(card => {
+    const id = card.dataset.id;
+    const counts = tallies[id] || { A: 0, B: 0 };
+    paintPropCard(card, counts);
+    const votedKey = `voted:${data.week}:${id}`;
+    if (localStorage.getItem(votedKey)) lockPropCard(card);
+
+    card.querySelectorAll(".prop-option").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        if (localStorage.getItem(votedKey)) return;
+        const option = btn.dataset.option;
+        try {
+          const res = await fetch("/api/votes", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ week: data.week, propId: id, option })
+          });
+          const updated = await res.json();
+          paintPropCard(card, updated);
+        } catch (e) {
+          counts[option]++;
+          paintPropCard(card, counts);
+        }
+        localStorage.setItem(votedKey, option);
+        lockPropCard(card);
+      });
+    });
+  });
+}
+
+function paintPropCard(card, counts) {
+  const total = (counts.A || 0) + (counts.B || 0);
+  const pctA = total ? Math.round((counts.A / total) * 100) : 0;
+  const pctB = total ? 100 - pctA : 0;
+  const [btnA, btnB] = card.querySelectorAll(".prop-option");
+  btnA.querySelector(".fill").style.width = `${pctA}%`;
+  btnB.querySelector(".fill").style.width = `${pctB}%`;
+  btnA.querySelector(".opt-pct").textContent = total ? `${pctA}% (${counts.A})` : "";
+  btnB.querySelector(".opt-pct").textContent = total ? `${pctB}% (${counts.B})` : "";
+}
+function lockPropCard(card) {
+  card.querySelectorAll(".prop-option").forEach(b => b.classList.add("voted"));
+}
+
+/* ============================================================
+   POWER RANKINGS — dynasty superflex PPR values via FantasyCalc,
+   combined with live rosters. Always current (no manual updates).
+   ============================================================ */
+async function renderPowerRankings() {
+  const body = document.getElementById("power-body");
+  try {
+    const current = state.chain[0];
+    const teamCount = current.league.total_rosters || 12;
+    const nearestSupported = [10, 12, 14].reduce((best, n) =>
+      Math.abs(n - teamCount) < Math.abs(best - teamCount) ? n : best, 12);
+
+    const values = await getJSON(
+      `https://api.fantasycalc.com/values/current?isDynasty=true&numQbs=2&numTeams=${nearestSupported}&ppr=1`
+    );
+    const valueBySleeperId = {};
+    values.forEach(v => { if (v.player?.sleeperId) valueBySleeperId[v.player.sleeperId] = v; });
+
+    const rows = current.rosters.map(r => {
+      const owner = state.ownerDirectory[r.owner_id];
+      const players = (r.players || []).map(pid => valueBySleeperId[pid]).filter(Boolean);
+      const total = players.reduce((sum, p) => sum + p.value, 0);
+      const topAsset = players.sort((a, b) => b.value - a.value)[0];
+      return { owner, total, topAsset };
+    }).sort((a, b) => b.total - a.total);
+
+    body.innerHTML = rows.map((r, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${r.owner?.team || "—"}</td>
+        <td>${r.owner?.name || "—"}</td>
+        <td class="num">${r.total.toLocaleString()}</td>
+        <td>${r.topAsset?.player?.name || "—"}</td>
+      </tr>
+    `).join("");
+  } catch (e) {
+    console.error(e);
+    body.innerHTML = `<tr><td colspan="5" class="loading">FantasyCalc's public API is unreachable right now — try again later.</td></tr>`;
+  }
+}
+
+/* ============================================================
+   TRADE FEED — every trade, formatted as a poster-style card
+   ============================================================ */
+async function renderTradeFeed() {
+  const feed = document.getElementById("trade-feed");
+  try {
+    const allTrades = [];
+    for (const season of state.chain) {
+      const weekTx = await Promise.all(
+        Array.from({ length: 18 }, (_, i) => i + 1).map(wk =>
+          getJSON(`${API}/league/${season.league.league_id}/transactions/${wk}`).catch(() => [])
+        )
+      );
+      weekTx.flat()
+        .filter(t => t.type === "trade" && t.status === "complete")
+        .forEach(t => allTrades.push({ tx: t, season }));
+    }
+
+    if (allTrades.length === 0) {
+      feed.innerHTML = `<p class="loading">No trades on record yet.</p>`;
+      return;
+    }
+
+    allTrades.sort((a, b) => (b.tx.created || 0) - (a.tx.created || 0));
+    await loadPlayersIfNeeded();
+
+    feed.innerHTML = allTrades.map(({ tx, season }) => {
+      const sides = {};
+      (tx.roster_ids || []).forEach(rid => {
+        const oid = ownerKey(season, rid);
+        sides[rid] = { owner: state.ownerDirectory[oid] || { name: "Unknown", team: "Unknown" }, items: [] };
+      });
+      Object.entries(tx.adds || {}).forEach(([pid, rid]) => {
+        if (!sides[rid]) return;
+        const p = state.players?.[pid];
+        sides[rid].items.push(p ? (p.full_name || pid) : pid);
+      });
+      (tx.draft_picks || []).forEach(pick => {
+        if (!sides[pick.owner_id]) return;
+        sides[pick.owner_id].items.push(`${pick.season} Round ${pick.round} pick`);
+      });
+      const date = tx.created ? new Date(tx.created).toLocaleDateString() : season.league.season;
+      const sideEntries = Object.values(sides);
+
+      const sideHTML = sideEntries.map(s => `
+        <div class="trade-side">
+          <p class="team">${s.owner.avatar ? `<img src="${s.owner.avatar}" alt="">` : ""}${s.owner.team}</p>
+          <ul>${s.items.map(i => `<li>${i}</li>`).join("") || "<li>—</li>"}</ul>
+        </div>
+      `);
+      // interleave an arrow between exactly two sides; more than two just stacks
+      const middle = sideEntries.length === 2 ? `<div class="trade-arrow">⇄</div>` : "";
+      const layout = sideEntries.length === 2
+        ? `${sideHTML[0]}${middle}${sideHTML[1]}`
+        : sideHTML.join("");
+
+      return `
+        <div class="trade-card">
+          <p class="trade-date">${season.league.season} · ${date}</p>
+          <div class="trade-sides">${layout}</div>
+        </div>`;
+    }).join("");
+  } catch (e) {
+    console.error(e);
+    feed.innerHTML = `<p class="loading">Couldn't load the trade log right now.</p>`;
+  }
+}
+
+/* ============================================================
    Boot
    ============================================================ */
 (async function init() {
   try {
     const chain = await loadLeagueChain(LEAGUE_ID);
     const games = await loadAllMatchups(chain);
+    const ownerDirectory = buildOwnerDirectory(chain);
+    const standings = computeStandings(chain);
+
+    state.chain = chain;
+    state.games = games;
+    state.ownerDirectory = ownerDirectory;
+    state.standings = standings;
+
     renderHero(chain, games);
-    renderStandings(chain);
-    renderH2H(games);
-    renderRecords(chain, games);
+    renderStandings(chain, standings);
+    setupH2HPicker(games, ownerDirectory);
+    renderRecords(chain, games, ownerDirectory);
+    renderTeamsGrid(standings, ownerDirectory, chain);
     await renderHistory(chain);
   } catch (err) {
     console.error(err);
