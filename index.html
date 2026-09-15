@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tnaat Dynasty — League Archive</title>
+<meta name="description" content="The official record book of the Tnaat Dynasty fantasy football league." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="hero">
+  <img class="hero-img" src="assets/hero.jpg" alt="Tnaat Dynasty Season IV poster" />
+  <div class="hero-scrim"></div>
+  <div class="hero-content">
+    <p class="hero-kicker">est. <span id="hero-founded">—</span></p>
+    <div class="hero-stats" id="hero-stats">
+      <div class="hero-stat"><span class="num" id="stat-seasons">–</span><span class="lbl">seasons</span></div>
+      <div class="hero-stat"><span class="num" id="stat-managers">–</span><span class="lbl">managers</span></div>
+      <div class="hero-stat"><span class="num" id="stat-games">–</span><span class="lbl">matchups played</span></div>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-target="standings">Standings</button>
+  <button class="tab" data-target="h2h">Head-to-Head</button>
+  <button class="tab" data-target="records">Record Book</button>
+  <button class="tab" data-target="history">Season History</button>
+</nav>
+
+<main>
+
+  <section id="standings" class="panel active">
+    <h2>Current Standings — <span id="standings-season">this season</span></h2>
+    <div class="table-wrap">
+      <table id="standings-table">
+        <thead>
+          <tr><th>Rank</th><th>Manager</th><th>Team</th><th>Record</th><th>PF</th><th>PA</th></tr>
+        </thead>
+        <tbody id="standings-body">
+          <tr><td colspan="6" class="loading">Pulling live data from Sleeper…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="h2h" class="panel">
+    <h2>All-Time Head-to-Head</h2>
+    <p class="section-note">Every regular-season and playoff matchup on record. Row manager's record vs. column manager.</p>
+    <div class="table-wrap h2h-wrap">
+      <table id="h2h-table">
+        <tbody><tr><td class="loading">Building the grid…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="records" class="panel">
+    <h2>The Record Book</h2>
+    <div class="record-grid" id="record-grid">
+      <div class="loading">Digging through the archives…</div>
+    </div>
+  </section>
+
+  <section id="history" class="panel">
+    <h2>Season by Season</h2>
+    <ol class="timeline" id="timeline">
+      <li class="loading">Loading history…</li>
+    </ol>
+  </section>
+
+</main>
+
+<footer>
+  <p>Tnaat Dynasty League Archive · data pulled live from Sleeper</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
